@@ -7,7 +7,23 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <style>
+  /* ---------- Auth screen ---------- */
+  .auth-screen{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:24px}
+  .auth-card{width:100%;max-width:360px;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-md);padding:28px 26px}
+  .auth-card .wordmark{margin-bottom:4px;padding:0}
+  .auth-sub{font-size:12.5px;color:var(--ink-4);margin-bottom:20px}
+  .auth-card input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);color:var(--ink);font-size:13.5px;font-family:inherit;margin-bottom:10px}
+  .auth-card input:focus{outline:2px solid var(--accent-strong);outline-offset:1px}
+  .auth-row{display:flex;gap:8px;margin-top:4px}
+  .auth-btn{flex:1;padding:10px 14px;border-radius:999px;border:1px solid var(--border-strong);background:var(--surface);color:var(--ink-2);font-size:12.5px;font-weight:700;cursor:pointer}
+  .auth-btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+  .auth-btn:disabled{opacity:.5;cursor:default}
+  .auth-status{font-size:12px;color:var(--ink-4);margin-top:12px;min-height:16px}
+  .rail-user{font-size:11.5px;color:var(--ink-3);padding:0 6px 8px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .rail-user button{background:none;border:none;color:var(--ink-4);font-size:11px;font-weight:700;cursor:pointer;text-decoration:underline;padding:0}
+
   /* ============================================================
      Layout concept: a documentation site, not a dashboard — a
      file-tree sidebar on the left (mirrors how the source Miro
@@ -218,6 +234,24 @@
 </style>
 </head>
 <body>
+<div id="authScreen" class="auth-screen">
+  <div class="auth-card">
+    <div class="wordmark"><span class="dot"></span><span class="word">enshift</span></div>
+    <p class="auth-sub">PM Field Guide — access restricted to @enshift.com accounts</p>
+    <form id="authForm">
+      <input type="email" id="authEmail" placeholder="you@enshift.com" autocomplete="username" required>
+      <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password" required>
+      <div class="auth-row">
+        <button type="submit" id="authSignIn" class="auth-btn primary">Sign in</button>
+        <button type="button" id="authSignUp" class="auth-btn">Create account</button>
+      </div>
+      <p class="auth-status" id="authStatus">&nbsp;</p>
+    </form>
+  </div>
+</div>
+
+<div id="appRoot" style="display:none">
+
 <a class="skip-link" href="#home">Skip to content</a>
 
 <div class="topbar">
@@ -235,6 +269,10 @@
     <a class="wordmark" href="#home" data-nav="home"><span class="dot"></span><span class="word">enshift</span></a>
     <span class="rail-sub">PM Field Guide</span>
     <ul class="tree" id="tree"></ul>
+    <div class="rail-user" id="railUser" style="display:none">
+      <span id="railUserEmail"></span>
+      <button id="signOutBtn" type="button">Sign out</button>
+    </div>
     <div class="rail-foot">Built from the team's process map &middot; flag gaps as you go</div>
   </nav>
 
@@ -243,9 +281,18 @@
   </main>
 </div>
 
+</div>
+
 <script>
 (function(){
   "use strict";
+
+  /* ================= Supabase ================= */
+  const SUPABASE_URL = "https://xglhrgwgqbwvlvlxzjia.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_n_4r6-l9Pzfqb5u7BATYVg_xX4XSprt";
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  let currentUser = null;
+  let appStarted = false;
 
   /* ================= small helpers ================= */
   function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
@@ -683,13 +730,6 @@
   const parentOf = {};
   TREE.forEach(n => { if(n.children) n.children.forEach(cid => { parentOf[cid] = n.id; }); });
 
-  /* ================= storage ================= */
-  function safeGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
-  function safeSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
-
-  /* ================= examples storage (per-browser) ================= */
-  function exampleKey(nodeId){ return "pmguide_example_"+nodeId; }
-
   /* ================= render: block content ================= */
   function renderBlock(b){
     if(b.t==="p") return '<div class="block"><p class="text">'+b.text+'</p></div>';
@@ -817,12 +857,12 @@
       '</tbody></table></div>';
   }
 
-  /* ---- example editor (db-backed) ---- */
+  /* ---- example editor (shared via Supabase) ---- */
   function renderExampleBox(nodeId){
     const boxId = "ex-"+nodeId;
     return '<div class="example-box" id="'+boxId+'">'+
       '<h3>Example / template</h3>'+
-      '<p class="ex-note">Saved in this browser only (this page has no shared backend yet). Paste the real text, or a link to where it lives — useful as your own reference, or to screenshot into the team chat.</p>'+
+      '<p class="ex-note">Shared with the whole team — saved to enshift\'s Supabase project, visible to anyone signed in here. Paste the real text, or a link to where it lives.</p>'+
       '<textarea id="'+boxId+'-text" placeholder="Paste an example, notes, or describe where the real document is stored…"></textarea>'+
       '<input type="url" id="'+boxId+'-url" placeholder="Optional link (SharePoint, Drive, BC record…)">'+
       '<div class="ex-row"><span class="ex-status" id="'+boxId+'-status">&nbsp;</span>'+
@@ -830,7 +870,7 @@
       '</div>';
   }
 
-  function wireExampleBox(nodeId){
+  async function wireExampleBox(nodeId){
     const boxId = "ex-"+nodeId;
     const textEl = document.getElementById(boxId+"-text");
     const urlEl = document.getElementById(boxId+"-url");
@@ -838,21 +878,39 @@
     const saveBtn = document.getElementById(boxId+"-save");
     if(!textEl) return;
 
-    const key = exampleKey(nodeId);
-    const raw = safeGet(key);
-    if(raw){
-      try{
-        const data = JSON.parse(raw);
+    statusEl.textContent = "Loading…";
+    try{
+      const { data, error } = await sb.from("examples").select("*").eq("id", nodeId).maybeSingle();
+      if(error) throw error;
+      if(data){
         textEl.value = data.text || "";
         urlEl.value = data.url || "";
-        statusEl.textContent = data.updatedAt ? ("Last saved "+new Date(data.updatedAt).toLocaleDateString()) : "";
-      }catch(e){}
+        statusEl.textContent = data.updated_at ? ("Last saved "+new Date(data.updated_at).toLocaleDateString()+(data.updated_by?" by "+esc(data.updated_by):"")) : " ";
+      } else {
+        statusEl.textContent = " ";
+      }
+    }catch(e){
+      statusEl.textContent = "Couldn't load (" + (e.message||e) + ")";
     }
 
-    saveBtn.addEventListener("click", function(){
-      const data = { text: textEl.value, url: urlEl.value, updatedAt: new Date().toISOString() };
-      safeSet(key, JSON.stringify(data));
-      statusEl.textContent = "Saved just now.";
+    saveBtn.addEventListener("click", async function(){
+      saveBtn.disabled = true;
+      statusEl.textContent = "Saving…";
+      try{
+        const payload = {
+          id: nodeId,
+          text: textEl.value,
+          url: urlEl.value,
+          updated_at: new Date().toISOString(),
+          updated_by: currentUser ? currentUser.email : null
+        };
+        const { error } = await sb.from("examples").upsert(payload);
+        if(error) throw error;
+        statusEl.textContent = "Saved just now.";
+      }catch(e){
+        statusEl.textContent = "Couldn't save (" + (e.message||e) + ")";
+      }
+      saveBtn.disabled = false;
     });
   }
 
@@ -912,6 +970,8 @@
 
   /* ================= boot ================= */
   function start(){
+    if(appStarted) return;
+    appStarted = true;
     const initial = (location.hash || "#home").replace("#","");
     render(byId[initial] ? initial : "home");
     window.addEventListener("hashchange", function(){
@@ -920,11 +980,62 @@
     });
   }
 
-  if(window.claude && window.claude.hot && window.claude.hot.ready){
-    window.claude.hot.ready(start);
-  } else {
+  /* ================= auth ================= */
+  const authScreen = document.getElementById("authScreen");
+  const appRoot = document.getElementById("appRoot");
+  const authForm = document.getElementById("authForm");
+  const authEmail = document.getElementById("authEmail");
+  const authPassword = document.getElementById("authPassword");
+  const authStatus = document.getElementById("authStatus");
+  const authSignUp = document.getElementById("authSignUp");
+  const railUser = document.getElementById("railUser");
+  const railUserEmail = document.getElementById("railUserEmail");
+  const signOutBtn = document.getElementById("signOutBtn");
+
+  function showApp(user){
+    currentUser = user;
+    authScreen.style.display = "none";
+    appRoot.style.display = "";
+    if(railUser){ railUser.style.display = "flex"; }
+    if(railUserEmail){ railUserEmail.textContent = user && user.email ? user.email : ""; }
     start();
   }
+
+  function showAuth(){
+    currentUser = null;
+    appRoot.style.display = "none";
+    authScreen.style.display = "flex";
+  }
+
+  authForm.addEventListener("submit", async function(e){
+    e.preventDefault();
+    authStatus.textContent = "Signing in…";
+    const { error } = await sb.auth.signInWithPassword({ email: authEmail.value.trim(), password: authPassword.value });
+    if(error) authStatus.textContent = error.message;
+  });
+
+  authSignUp.addEventListener("click", async function(){
+    if(!authEmail.value || !authPassword.value){ authStatus.textContent = "Enter an email and password first."; return; }
+    authStatus.textContent = "Creating account…";
+    const { error } = await sb.auth.signUp({ email: authEmail.value.trim(), password: authPassword.value });
+    if(error) authStatus.textContent = error.message;
+    else authStatus.textContent = "Account created — check your email to confirm, then sign in.";
+  });
+
+  if(signOutBtn){
+    signOutBtn.addEventListener("click", async function(){
+      await sb.auth.signOut();
+    });
+  }
+
+  sb.auth.onAuthStateChange(function(event, session){
+    if(session && session.user) showApp(session.user); else showAuth();
+  });
+
+  sb.auth.getSession().then(function(res){
+    const session = res && res.data ? res.data.session : null;
+    if(session && session.user) showApp(session.user); else showAuth();
+  });
 })();
 </script>
 
